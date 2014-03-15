@@ -102,13 +102,18 @@ public class GZIPInputStream extends InflaterInputStream {
     public GZIPInputStream(InputStream is, int size) throws IOException {
         super(is, new Inflater(true), size);
 
-        byte[] header = readHeader(is);
-        final short magic = Memory.peekShort(header, 0, ByteOrder.LITTLE_ENDIAN);
-        if (magic != (short) GZIP_MAGIC) {
-            throw new IOException(String.format("unknown format (magic number %x)", magic));
-        }
+        try {
+            byte[] header = readHeader(is);
+            final short magic = Memory.peekShort(header, 0, ByteOrder.LITTLE_ENDIAN);
+            if (magic != (short) GZIP_MAGIC) {
+                throw new IOException(String.format("unknown format (magic number %x)", magic));
+            }
 
-        parseGzipHeader(is, header, crc, buf);
+            parseGzipHeader(is, header, crc, buf);
+        } catch (IOException e) {
+            close(); // release the inflater
+            throw e;
+        }
     }
 
     /**
@@ -161,10 +166,14 @@ public class GZIPInputStream extends InflaterInputStream {
         // successfully consumed the GZIP trailer.
         final int remaining = inf.getRemaining() - GZIP_TRAILER_SIZE;
         if (remaining > 0) {
-            // NOTE: This prevents us from creating multiple layers of nested
-            // PushbackInputStreams if we have multiple members in this stream.
+            // NOTE: We make sure we create a pushback stream exactly once,
+            // even if the input stream contains multiple members.
+            //
+            // The push back stream we create must therefore be able to contain
+            // (worst case) the entire buffer even though there may be fewer bytes
+            // remaining when it is first created.
             if (!(in instanceof PushbackInputStream)) {
-                in = new PushbackInputStream(in, BUF_SIZE);
+                in = new PushbackInputStream(in, buf.length);
             }
             ((PushbackInputStream) in).unread(buf,
                     inf.getCurrentOffset() + GZIP_TRAILER_SIZE, remaining);
